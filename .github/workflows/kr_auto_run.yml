@@ -1,0 +1,35 @@
+name: KR Stock AI Daily Run
+
+on:
+  schedule:
+    - cron: '21 21 * * *'  # 한국 오전 6시 = UTC 전날 21시
+  workflow_dispatch:
+
+jobs:
+  run-kr-stock-ai:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v3
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 🛠️ Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🚀 Run Korean Stock AI
+        run: python daily_kr.py
+
+      - name: 💾 Commit and push updated CSVs
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add data/*.csv
+          git commit -m "✅ KR 자동 예측 결과 업데이트" || echo "No changes to commit"
+          git push
