@@ -18,9 +18,13 @@ import requests
 from datetime import datetime
 from tensorflow.keras.callbacks import EarlyStopping
 import matplotlib.font_manager as fm
+import platform
 
 
-font_path = "C:/Windows/Fonts/malgun.ttf"
+if platform.system() == 'Windows':
+    font_path = "C:/Windows/Fonts/malgun.ttf"
+else:
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 font_name = fm.FontProperties(fname=font_path).get_name()
 
 # ------------------------
