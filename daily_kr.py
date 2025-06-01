@@ -575,9 +575,20 @@ def simulate_combined_trading_simple_formatted(df):
     result_df = pd.DataFrame(history)
     if not result_df.empty:
         result_df = result_df[["날짜", "모델", "종목명", "티커", "예측 수익률", "현재가", "매수(매도)", "잔여 현금", "총 자산"]]
-        os.makedirs("data", exist_ok=True)
-        result_df.to_csv(SIMULATION_FILE_SIMPLE_FORMATTED, index=False)
-        print(f"[3단계] 시뮬레이션 결과 저장 완료 → {SIMULATION_FILE_SIMPLE_FORMATTED}")
+    
+        # 실제 수익률 및 예측 정확도 추가
+        result_df = result_df.merge(
+            df[["Date", "Ticker", "Return_1D"]].rename(columns={"Date": "날짜", "Ticker": "티커"}),
+            on=["날짜", "티커"],
+            how="left"
+        )
+        result_df["실제 수익률"] = result_df["Return_1D"] * 100
+        result_df["예측 정확도"] = result_df["예측 수익률"] * result_df["실제 수익률"] > 0
+        result_df.drop(columns=["Return_1D"], inplace=True)
+    
+        # 저장
+        result_df.to_csv("data/kr_simulation_result_with_accuracy.csv", index=False, encoding="utf-8-sig")
+        print("✅ 시뮬레이션 결과 + 정확도 저장 완료 → data/kr_simulation_result_with_accuracy.csv")
     else:
         print("[3단계] 시뮬레이션 결과 없음")
 
