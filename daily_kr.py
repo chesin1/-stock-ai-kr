@@ -23,7 +23,7 @@ from tensorflow.keras import backend as K
 
 
 # font_path = "C:/Windows/Fonts/malgun.ttf"
-font_name = fm.FontProperties(fname=font_path).get_name()
+# font_name = fm.FontProperties(fname=font_path).get_name()
 
 # ------------------------
 # 설정
