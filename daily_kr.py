@@ -434,7 +434,7 @@ def predict_ai_scores(df):
             continue
 
         test_df = pd.DataFrame(valid_rows)
-        test_df["Predicted_Return_Dense_LSTM"] = lstm_preds
+        test_df["Predicted_Return_Dense_LSTM"] = lstm_preds * 100
 
         all_preds.append(test_df)
         print(f"✅ {current_date.date()} 예측 완료 - {len(test_df)}종목")
