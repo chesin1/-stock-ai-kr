@@ -16,6 +16,12 @@ import difflib
 import xml.etree.ElementTree as ET
 import requests
 from datetime import datetime
+from tensorflow.keras.callbacks import EarlyStopping
+import matplotlib.font_manager as fm
+
+
+font_path = "C:/Windows/Fonts/malgun.ttf"
+font_name = fm.FontProperties(fname=font_path).get_name()
 
 # ------------------------
 # 설정
@@ -346,14 +352,16 @@ def predict_ai_scores(df):
     X_lstm_train, y_lstm_train = [], []
     for i in range(SEQUENCE_LENGTH, len(scaled_df)):
         X_lstm_train.append(scaled_df.iloc[i - SEQUENCE_LENGTH:i].values)
-        y_lstm_train.append(y_train_1d.values[i])
+        y_lstm_train.append(y_train_1d.iloc[i])
 
     X_lstm_train = np.array(X_lstm_train)
     y_lstm_train = np.array(y_lstm_train)
 
     # LSTM 모델 구성
+    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
     dense_lstm_model = Sequential()
-    dense_lstm_model.add(LSTM(128, input_shape=(SEQUENCE_LENGTH, X_scaled.shape[1]), return_sequences=False))
+    dense_lstm_model.add(LSTM(128, input_shape=(SEQUENCE_LENGTH, scaled_df.shape[1]), return_sequences=False))
     dense_lstm_model.add(BatchNormalization())
     dense_lstm_model.add(Dropout(0.2))
     dense_lstm_model.add(Dense(64, activation='relu'))
@@ -361,7 +369,18 @@ def predict_ai_scores(df):
     dense_lstm_model.add(Dense(32, activation='relu'))
     dense_lstm_model.add(Dense(1))
     dense_lstm_model.compile(optimizer='adam', loss='mse')
-    dense_lstm_model.fit(X_lstm_train, y_lstm_train, epochs=20, batch_size=16, verbose=0)
+
+    # ⏳ 학습 (Epoch: 30, 검증분리 10%)
+    dense_lstm_model.fit(
+        X_lstm_train,
+        y_lstm_train,
+        epochs=30,
+        batch_size=16,
+        validation_split=0.1,
+        callbacks=[early_stop],
+        verbose=1
+    )
+
 
     test_dates = df[df["Date"] >= pd.to_datetime("2025-05-01")]["Date"].drop_duplicates().sort_values()
     all_preds = []
@@ -381,23 +400,39 @@ def predict_ai_scores(df):
         test_df["Predicted_Return_GB_1D"] = gb_1d.predict(test_df[FEATURE_COLUMNS]) * 4
         test_df["Predicted_Return_GB_20D"] = gb_20d.predict(test_df[FEATURE_COLUMNS])
 
-        # ✅ LSTM 예측용 시퀀스 생성
-        X_test_scaled = scaler.transform(test_df[FEATURE_COLUMNS])
-        sequence_input = []
+        # ✅ LSTM 예측용 시퀀스 생성 (종목별 과거 10일 기준)
+        lstm_preds = []
+        valid_rows = []
 
-        for i in range(len(X_test_scaled)):
-            if i < SEQUENCE_LENGTH:
-                pad = np.zeros((SEQUENCE_LENGTH - i, X_test_scaled.shape[1]))
-                sequence = np.vstack((pad, X_test_scaled[:i + 1]))
-            else:
-                sequence = X_test_scaled[i - SEQUENCE_LENGTH + 1:i + 1]
-            sequence_input.append(sequence)
+        for _, row in test_df.iterrows():
+            ticker = row["Ticker"]
+            target_date = row["Date"]
 
-        X_lstm_test = np.array(sequence_input)
-        test_df["Predicted_Return_LSTM"] = dense_lstm_model.predict(X_lstm_test, verbose=0).flatten() * 30
+            # ① 과거 10일치 시퀀스 확보
+            past_window = df[(df["Ticker"] == ticker) & (df["Date"] < target_date)].sort_values(by="Date").tail(SEQUENCE_LENGTH)
+
+            if len(past_window) < SEQUENCE_LENGTH:
+                continue  # 부족하면 스킵
+
+            # ② 피처만 추출하고 스케일링
+            X_seq = past_window[FEATURE_COLUMNS].fillna(0)
+            X_seq_scaled = scaler.transform(X_seq)
+            X_lstm_input = np.expand_dims(X_seq_scaled, axis=0)  # (1, 10, feature수)
+
+            # ③ 예측
+            pred = dense_lstm_model.predict(X_lstm_input, verbose=0)[0][0]
+            lstm_preds.append(pred * 30)
+            valid_rows.append(row)
+
+        # ④ 결과 병합
+        test_df = pd.DataFrame(valid_rows)
+        test_df["Predicted_Return_LSTM"] = lstm_preds
 
         all_preds.append(test_df)
         print(f"✅ {current_date.date()} 예측 완료 - {len(test_df)}종목")
+        
+
+        
 
     if not all_preds:
         print("❌ 예측 결과 없음. 시뮬레이션 불가")
@@ -574,58 +609,69 @@ def simulate_combined_trading_simple_formatted(df):
 def visualize_trades_simple(df, sim_df_simple):
     print("[4단계] 시각화 시작")
     os.makedirs("charts", exist_ok=True)
-    
-    # ✅ stock_df 날짜는 timezone 없음
+
+    # ✅ 한글 깨짐 방지용 폰트 설정
+    font_path = "C:/Windows/Fonts/malgun.ttf"
+    font_name = fm.FontProperties(fname=font_path).get_name()
+    plt.rcParams["font.family"] = font_name
+    plt.rcParams["axes.unicode_minus"] = False
+
     df["Date"] = pd.to_datetime(df["Date"]).dt.tz_localize(None)
+    sim_df_simple["날짜"] = pd.to_datetime(sim_df_simple["날짜"]).dt.tz_localize(None)
 
-    if sim_df_simple.empty:
-        print("  - 시각화할 시뮬레이션 결과가 없습니다.")
-        return
+    # ✅ 삼성전자만 필터링
+    target_stock = "삼성전자"
+    ticker = df[df["종목명"] == target_stock]["Ticker"].unique()[0]
+    stock_df = df[df["Ticker"] == ticker].sort_values(by="Date")
 
-    # ✅ sim_df_simple["날짜"] 안전하게 처리
-    sim_df_simple["날짜"] = pd.to_datetime(sim_df_simple["날짜"])
-    if sim_df_simple["날짜"].dt.tz is not None:
-        sim_df_simple["날짜"] = sim_df_simple["날짜"].dt.tz_localize(None)
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(stock_df["Date"], stock_df["Close"], label="종가", linewidth=2, alpha=0.7)
 
-    for ticker in df["종목명"].unique():
-        fig, ax = plt.subplots(figsize=(12, 6))
-        stock_df = df[df["Ticker"] == ticker].sort_values(by="Date")
-        ax.plot(stock_df["Date"], stock_df["Close"], label="Close Price", alpha=0.6)
+    for model in sim_df_simple["모델"].unique():
+        trades = sim_df_simple[(sim_df_simple["티커"] == ticker) & (sim_df_simple["모델"] == model)].copy()
 
-        for model in sim_df_simple["모델"].unique():
-            trades = sim_df_simple[(sim_df_simple["티커"] == ticker) & (sim_df_simple["모델"] == model)].copy()
+        if trades.empty:
+            continue
 
-            if trades.empty:
-                continue
+        trades = pd.merge(
+            trades,
+            stock_df[["Date", "Close"]].rename(columns={"Close": "Actual_Close"}),
+            left_on="날짜",
+            right_on="Date",
+            how="left"
+        )
 
-            # ✅ merge 시 타임존 제거된 날짜 사용
-            trades = pd.merge(
-                trades,
-                stock_df[["Date", "Close"]].rename(columns={"Close": "Actual_Close"}),
-                left_on="날짜",
-                right_on="Date",
-                how="left"
-            )
+        # ✅ 매수/매도 시각화
+        buys = trades[trades["매수(매도)"].str.contains("BUY", na=False)]
+        sells = trades[trades["매수(매도)"].str.contains("SELL", na=False)]
 
-            if 'Actual_Close' in trades.columns:
-                buys = trades[trades["매수(매도)"].str.contains("BUY", na=False)]
-                sells = trades[trades["매수(매도)"].str.contains("SELL", na=False)]
+        ax.scatter(buys["날짜"], buys["Actual_Close"], label=f"{model} 매수", marker="^", color="green", zorder=5)
+        ax.scatter(sells["날짜"], sells["Actual_Close"], label=f"{model} 매도", marker="v", color="red", zorder=5)
 
-                ax.scatter(buys["날짜"], buys["Actual_Close"], label=f"{model} BUY", marker="^", color="green", zorder=5)
-                ax.scatter(sells["날짜"], sells["Actual_Close"], label=f"{model} SELL", marker="v", color="red", zorder=5)
-            else:
-                print(f"⚠️ 경고: '{ticker}'의 시각화에서 'Actual_Close'를 찾을 수 없습니다.")
+        # ✅ MAE 계산
+        if "Predicted_Return_LSTM" in trades.columns and "Actual_Close" in trades.columns:
+            trades["예측_종가"] = trades["Actual_Close"] * (1 + trades["Predicted_Return_LSTM"])
+            mae = mean_absolute_error(trades["Actual_Close"], trades["예측_종가"])
+            ax.plot(trades["날짜"], trades["예측_종가"], label="Dense-LSTM 예측 종가", linestyle="--", alpha=0.7)
+        else:
+            mae = np.nan
 
-        ax.set_title(f"{ticker} - AI Trading Signals")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Price")
-        ax.legend()
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        plt.savefig(f"charts/{ticker}_trades_simple_{model}.png")
-        plt.close()
+        # ✅ 타이틀에 MAE 추가
+        ax.set_title(f"삼성전자 - Dense-LSTM 시뮬레이션 (MAE: {mae:.2f})")
 
-    print("[4단계] 시각화 완료 → charts/*.png")
+    ax.set_xlabel("날짜")
+    ax.set_ylabel("주가 (원)")
+    ax.legend()
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.rcParams["font.family"] = font_name
+    plt.rcParams["axes.unicode_minus"] = False
+
+    # ✅ 저장
+    save_path = f"charts/SAMSUNG_trades_simple_Dense-LSTM.png"
+    plt.savefig(save_path)
+    plt.close()
+    print(f"[완료] → {save_path}")
 
 
 # ------------------------
