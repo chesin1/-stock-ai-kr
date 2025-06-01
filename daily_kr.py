@@ -18,10 +18,12 @@ import requests
 from datetime import datetime
 from tensorflow.keras.callbacks import EarlyStopping
 import matplotlib.font_manager as fm
-import platform
+import tensorflow as tf
+from tensorflow.keras import backend as K
 
 
-
+font_path = "C:/Windows/Fonts/malgun.ttf"
+font_name = fm.FontProperties(fname=font_path).get_name()
 
 # ------------------------
 # 설정
@@ -316,6 +318,29 @@ def update_stock_and_macro_data():
 # ------------------------
 # 2단계: AI 모델 예측
 # ------------------------
+np.random.seed(42)
+tf.random.set_seed(42)
+
+# 모델 생성 함수 정의
+def build_gb_1d():
+    return GradientBoostingRegressor(n_estimators=200, learning_rate=0.08, max_depth=4, subsample=0.8)
+
+def build_gb_20d():
+    return GradientBoostingRegressor(n_estimators=150, learning_rate=0.04, max_depth=6, subsample=0.9)
+
+def build_dense_lstm(input_shape):
+    K.clear_session()
+    model = Sequential([
+        LSTM(128, activation='tanh', input_shape=input_shape),
+        BatchNormalization(),
+        Dense(64, activation='relu'),
+        Dropout(0.3),
+        Dense(1)
+    ])
+    optimizer = tf.keras.optimizers.Adam(clipvalue=1.0)
+    model.compile(optimizer=optimizer, loss='mse')
+    return model
+
 def predict_ai_scores(df):
     print("[2단계] AI 예측 시작")
 
@@ -336,18 +361,14 @@ def predict_ai_scores(df):
     y_train_1d = train_df["Return_1D"]
     y_train_20d = train_df["Return_20D"]
 
-    # Gradient Boosting 모델 학습
-    gb_1d = GradientBoostingRegressor()
+    # 모델 학습
+    gb_1d = build_gb_1d()
     gb_1d.fit(X_train, y_train_1d)
 
-    gb_20d = GradientBoostingRegressor()
+    gb_20d = build_gb_20d()
     gb_20d.fit(X_train, y_train_20d)
 
-    # ✅ LSTM: 시퀀스 생성
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, Input
-    from tensorflow.keras.callbacks import EarlyStopping
-
+    # Dense-LSTM 훈련
     SEQUENCE_LENGTH = 10
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X_train)
@@ -361,30 +382,11 @@ def predict_ai_scores(df):
     X_lstm_train = np.array(X_lstm_train)
     y_lstm_train = np.array(y_lstm_train)
 
-    # ✅ LSTM 모델 정의 (seed 고정 없음)
+    dense_lstm_model = build_dense_lstm((SEQUENCE_LENGTH, X_scaled.shape[1]))
     early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    dense_lstm_model.fit(X_lstm_train, y_lstm_train, epochs=30, batch_size=16, validation_split=0.1, callbacks=[early_stop], verbose=1)
 
-    lstm_model = Sequential()
-    lstm_model.add(Input(shape=(SEQUENCE_LENGTH, X_scaled.shape[1])))
-    lstm_model.add(LSTM(128, return_sequences=False))
-    lstm_model.add(BatchNormalization())
-    lstm_model.add(Dropout(0.2))
-    lstm_model.add(Dense(64, activation='relu'))
-    lstm_model.add(Dropout(0.2))
-    lstm_model.add(Dense(32, activation='relu'))
-    lstm_model.add(Dense(1))
-    lstm_model.compile(optimizer='adam', loss='mse')
-    lstm_model.fit(
-        X_lstm_train,
-        y_lstm_train,
-        epochs=30,
-        batch_size=16,
-        validation_split=0.1,
-        callbacks=[early_stop],
-        verbose=1
-    )
-
-    # ✅ 예측 시작
+    # 예측 시작
     test_dates = df[df["Date"] >= pd.to_datetime("2025-05-01")]["Date"].drop_duplicates().sort_values()
     all_preds = []
 
@@ -398,11 +400,9 @@ def predict_ai_scores(df):
             print(f"⚠️ {current_date.date()} → 여전히 NaN 있음, 예측 스킵")
             continue
 
-        # ✅ GB 예측
         test_df["Predicted_Return_GB_1D"] = gb_1d.predict(test_df[FEATURE_COLUMNS]) * 4
         test_df["Predicted_Return_GB_20D"] = gb_20d.predict(test_df[FEATURE_COLUMNS])
 
-        # ✅ LSTM 예측 (종목별 과거 10일 기준)
         lstm_preds = []
         valid_rows = []
 
@@ -417,7 +417,7 @@ def predict_ai_scores(df):
             past_feats = past_window[FEATURE_COLUMNS].fillna(0)
             scaled_feats = scaler.transform(past_feats)
             input_seq = np.expand_dims(scaled_feats, axis=0)
-            pred = lstm_model.predict(input_seq, verbose=0)[0][0]
+            pred = dense_lstm_model.predict(input_seq, verbose=0)[0][0]
             lstm_preds.append(pred * 30)
             valid_rows.append(row)
 
@@ -425,7 +425,7 @@ def predict_ai_scores(df):
             continue
 
         test_df = pd.DataFrame(valid_rows)
-        test_df["Predicted_Return_LSTM"] = lstm_preds
+        test_df["Predicted_Return_Dense_LSTM"] = lstm_preds
 
         all_preds.append(test_df)
         print(f"✅ {current_date.date()} 예측 완료 - {len(test_df)}종목")
@@ -436,15 +436,13 @@ def predict_ai_scores(df):
 
     result_df = pd.concat(all_preds, ignore_index=True)
 
-    # ✅ 예측 종가 계산
     result_df["예측종가_GB_1D"] = result_df["Close"] * (1 + result_df["Predicted_Return_GB_1D"])
     result_df["예측종가_GB_20D"] = result_df["Close"] * (1 + result_df["Predicted_Return_GB_20D"])
-    result_df["예측종가_LSTM"] = result_df["Close"] * (1 + result_df["Predicted_Return_LSTM"])
+    result_df["예측종가_Dense_LSTM"] = result_df["Close"] * (1 + result_df["Predicted_Return_Dense_LSTM"])
 
     result_df.to_csv(PREDICTED_FILE, index=False)
     print(f"[2단계] 전체 예측 결과 저장 완료 → {PREDICTED_FILE}")
     return result_df
-
 
 
 # ------------------------
@@ -479,7 +477,7 @@ def simulate_combined_trading_simple_formatted(df):
     for date, date_df in df_sorted.groupby("Date"):
         for model, score_col in zip(
             portfolios.keys(),
-            ["Predicted_Return_GB_1D", "Predicted_Return_GB_20D", "Predicted_Return_LSTM"]
+            ["Predicted_Return_GB_1D", "Predicted_Return_GB_20D", "Predicted_Return_Dense_LSTM"]
         ):
             portfolio = portfolios[model]
             current_holdings = list(portfolio["holding"].keys())
@@ -572,10 +570,7 @@ def simulate_combined_trading_simple_formatted(df):
 
     result_df = pd.DataFrame(history)
     if not result_df.empty:
-        # ✅ 예측 종가 계산 (예측 수익률이 x10000 단위)
-        result_df["예측종가"] = result_df["현재가"] * (1 + result_df["예측 수익률"] / 10000)
-    
-        result_df = result_df[["날짜", "모델", "종목명", "티커", "예측 수익률", "현재가", "예측종가", "매수(매도)", "잔여 현금", "총 자산"]]
+        result_df = result_df[["날짜", "모델", "종목명", "티커", "예측 수익률", "현재가", "매수(매도)", "잔여 현금", "총 자산"]]
         os.makedirs("data", exist_ok=True)
         result_df.to_csv(SIMULATION_FILE_SIMPLE_FORMATTED, index=False)
         print(f"[3단계] 시뮬레이션 결과 저장 완료 → {SIMULATION_FILE_SIMPLE_FORMATTED}")
@@ -608,6 +603,25 @@ def simulate_combined_trading_simple_formatted(df):
             "보유 종목": holding_summary
         }
 
+        if model == "Dense-LSTM" and holding_summary:
+            df_lstm = pd.DataFrame([
+                {
+                    "모델": model,
+                    "종목명": ticker_to_name.get(ticker, ticker),
+                    "티커": ticker,
+                    "보유 수량": info["보유 수량"],
+                    "현재가": info["현재가"],
+                    "평가 금액": info["평가 금액"]
+                }
+                for ticker, info in holding_summary.items()
+            ] + [
+                {"모델": model, "종목명": "현금", "티커": "", "보유 수량": "", "현재가": "", "평가 금액": round(port["capital"], 2)},
+                {"모델": model, "종목명": "총 자산", "티커": "", "보유 수량": "", "현재가": "", "평가 금액": round(total_asset, 2)}
+            ])
+
+            df_lstm.to_csv("data/dense_lstm_portfolio_final.csv", index=False, encoding="utf-8-sig")
+            print("📁 Dense-LSTM 최종 포트폴리오 저장 완료 → data/dense_lstm_portfolio_final.csv")
+
     return result_df, final_assets
 
 # 4단계: 시각화 (간단한 시뮬레이션 결과로는 시각화가 제한될 수 있습니다)
@@ -617,11 +631,7 @@ def visualize_trades_simple(df, sim_df_simple):
     os.makedirs("charts", exist_ok=True)
 
     # ✅ 한글 깨짐 방지용 폰트 설정
-    if platform.system() == 'Windows':
-        font_path = "C:/Windows/Fonts/malgun.ttf"
-    else:
-        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    
+    font_path = "C:/Windows/Fonts/malgun.ttf"
     font_name = fm.FontProperties(fname=font_path).get_name()
     plt.rcParams["font.family"] = font_name
     plt.rcParams["axes.unicode_minus"] = False
@@ -659,8 +669,8 @@ def visualize_trades_simple(df, sim_df_simple):
         ax.scatter(sells["날짜"], sells["Actual_Close"], label=f"{model} 매도", marker="v", color="red", zorder=5)
 
         # ✅ MAE 계산
-        if "Predicted_Return_LSTM" in trades.columns and "Actual_Close" in trades.columns:
-            trades["예측_종가"] = trades["Actual_Close"] * (1 + trades["Predicted_Return_LSTM"])
+        if "Predicted_Return_Dense_LSTM" in trades.columns and "Actual_Close" in trades.columns:
+            trades["예측_종가"] = trades["Actual_Close"] * (1 + trades["Predicted_Return_Dense_LSTM"])
             mae = mean_absolute_error(trades["Actual_Close"], trades["예측_종가"])
             ax.plot(trades["날짜"], trades["예측_종가"], label="Dense-LSTM 예측 종가", linestyle="--", alpha=0.7)
         else:
