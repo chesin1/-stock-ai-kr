@@ -21,11 +21,7 @@ import matplotlib.font_manager as fm
 import platform
 
 
-if platform.system() == 'Windows':
-    font_path = "C:/Windows/Fonts/malgun.ttf"
-else:
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-font_name = fm.FontProperties(fname=font_path).get_name()
+
 
 # ------------------------
 # 설정
@@ -615,7 +611,11 @@ def visualize_trades_simple(df, sim_df_simple):
     os.makedirs("charts", exist_ok=True)
 
     # ✅ 한글 깨짐 방지용 폰트 설정
-    font_path = "C:/Windows/Fonts/malgun.ttf"
+    if platform.system() == 'Windows':
+        font_path = "C:/Windows/Fonts/malgun.ttf"
+    else:
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    
     font_name = fm.FontProperties(fname=font_path).get_name()
     plt.rcParams["font.family"] = font_name
     plt.rcParams["axes.unicode_minus"] = False
