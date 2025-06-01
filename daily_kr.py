@@ -344,6 +344,10 @@ def predict_ai_scores(df):
     gb_20d.fit(X_train, y_train_20d)
 
     # ✅ LSTM: 시퀀스 생성
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, Input
+    from tensorflow.keras.callbacks import EarlyStopping
+
     SEQUENCE_LENGTH = 10
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X_train)
@@ -357,21 +361,20 @@ def predict_ai_scores(df):
     X_lstm_train = np.array(X_lstm_train)
     y_lstm_train = np.array(y_lstm_train)
 
-    # LSTM 모델 구성
+    # ✅ LSTM 모델 정의 (seed 고정 없음)
     early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
 
-    dense_lstm_model = Sequential()
-    dense_lstm_model.add(LSTM(128, input_shape=(SEQUENCE_LENGTH, scaled_df.shape[1]), return_sequences=False))
-    dense_lstm_model.add(BatchNormalization())
-    dense_lstm_model.add(Dropout(0.2))
-    dense_lstm_model.add(Dense(64, activation='relu'))
-    dense_lstm_model.add(Dropout(0.2))
-    dense_lstm_model.add(Dense(32, activation='relu'))
-    dense_lstm_model.add(Dense(1))
-    dense_lstm_model.compile(optimizer='adam', loss='mse')
-
-    # ⏳ 학습 (Epoch: 30, 검증분리 10%)
-    dense_lstm_model.fit(
+    lstm_model = Sequential()
+    lstm_model.add(Input(shape=(SEQUENCE_LENGTH, X_scaled.shape[1])))
+    lstm_model.add(LSTM(128, return_sequences=False))
+    lstm_model.add(BatchNormalization())
+    lstm_model.add(Dropout(0.2))
+    lstm_model.add(Dense(64, activation='relu'))
+    lstm_model.add(Dropout(0.2))
+    lstm_model.add(Dense(32, activation='relu'))
+    lstm_model.add(Dense(1))
+    lstm_model.compile(optimizer='adam', loss='mse')
+    lstm_model.fit(
         X_lstm_train,
         y_lstm_train,
         epochs=30,
@@ -381,7 +384,7 @@ def predict_ai_scores(df):
         verbose=1
     )
 
-
+    # ✅ 예측 시작
     test_dates = df[df["Date"] >= pd.to_datetime("2025-05-01")]["Date"].drop_duplicates().sort_values()
     all_preds = []
 
@@ -391,48 +394,41 @@ def predict_ai_scores(df):
             continue
 
         test_df[FEATURE_COLUMNS] = test_df[FEATURE_COLUMNS].fillna(method='ffill').fillna(method='bfill').fillna(0)
-
         if test_df[FEATURE_COLUMNS].isnull().values.any():
             print(f"⚠️ {current_date.date()} → 여전히 NaN 있음, 예측 스킵")
             continue
 
-        # GB 예측
+        # ✅ GB 예측
         test_df["Predicted_Return_GB_1D"] = gb_1d.predict(test_df[FEATURE_COLUMNS]) * 4
         test_df["Predicted_Return_GB_20D"] = gb_20d.predict(test_df[FEATURE_COLUMNS])
 
-        # ✅ LSTM 예측용 시퀀스 생성 (종목별 과거 10일 기준)
+        # ✅ LSTM 예측 (종목별 과거 10일 기준)
         lstm_preds = []
         valid_rows = []
 
         for _, row in test_df.iterrows():
             ticker = row["Ticker"]
-            target_date = row["Date"]
-
-            # ① 과거 10일치 시퀀스 확보
-            past_window = df[(df["Ticker"] == ticker) & (df["Date"] < target_date)].sort_values(by="Date").tail(SEQUENCE_LENGTH)
+            date = row["Date"]
+            past_window = df[(df["Ticker"] == ticker) & (df["Date"] < date)].sort_values("Date").tail(SEQUENCE_LENGTH)
 
             if len(past_window) < SEQUENCE_LENGTH:
-                continue  # 부족하면 스킵
+                continue
 
-            # ② 피처만 추출하고 스케일링
-            X_seq = past_window[FEATURE_COLUMNS].fillna(0)
-            X_seq_scaled = scaler.transform(X_seq)
-            X_lstm_input = np.expand_dims(X_seq_scaled, axis=0)  # (1, 10, feature수)
-
-            # ③ 예측
-            pred = dense_lstm_model.predict(X_lstm_input, verbose=0)[0][0]
+            past_feats = past_window[FEATURE_COLUMNS].fillna(0)
+            scaled_feats = scaler.transform(past_feats)
+            input_seq = np.expand_dims(scaled_feats, axis=0)
+            pred = lstm_model.predict(input_seq, verbose=0)[0][0]
             lstm_preds.append(pred * 30)
             valid_rows.append(row)
 
-        # ④ 결과 병합
+        if not valid_rows:
+            continue
+
         test_df = pd.DataFrame(valid_rows)
         test_df["Predicted_Return_LSTM"] = lstm_preds
 
         all_preds.append(test_df)
         print(f"✅ {current_date.date()} 예측 완료 - {len(test_df)}종목")
-        
-
-        
 
     if not all_preds:
         print("❌ 예측 결과 없음. 시뮬레이션 불가")
@@ -440,14 +436,15 @@ def predict_ai_scores(df):
 
     result_df = pd.concat(all_preds, ignore_index=True)
 
-    # ✅ 예측 종가 컬럼 추가
+    # ✅ 예측 종가 계산
     result_df["예측종가_GB_1D"] = result_df["Close"] * (1 + result_df["Predicted_Return_GB_1D"])
     result_df["예측종가_GB_20D"] = result_df["Close"] * (1 + result_df["Predicted_Return_GB_20D"])
     result_df["예측종가_LSTM"] = result_df["Close"] * (1 + result_df["Predicted_Return_LSTM"])
-    
+
     result_df.to_csv(PREDICTED_FILE, index=False)
     print(f"[2단계] 전체 예측 결과 저장 완료 → {PREDICTED_FILE}")
     return result_df
+
 
 
 # ------------------------
