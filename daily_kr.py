@@ -715,7 +715,7 @@ if __name__ == "__main__":
             if not simulation_results_simple.empty:
                 # 간단한 시뮬리언 결과로는 보개화는 ì \xec96b음
                 # 거래 시점만 표시하는 시간간화 함수 사용
-                visualize_trades_simple(merged_df.copy(), simulation_results_simple.copy())
+              #  visualize_trades_simple(merged_df.copy(), simulation_results_simple.copy())
 
             print("\n📊 [예측 결과 미리보기 - 마지막 20행]")
             print(predicted_df.tail(20))
