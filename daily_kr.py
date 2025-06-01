@@ -439,6 +439,12 @@ def predict_ai_scores(df):
         return pd.DataFrame()
 
     result_df = pd.concat(all_preds, ignore_index=True)
+
+    # ✅ 예측 종가 컬럼 추가
+    result_df["예측종가_GB_1D"] = result_df["Close"] * (1 + result_df["Predicted_Return_GB_1D"])
+    result_df["예측종가_GB_20D"] = result_df["Close"] * (1 + result_df["Predicted_Return_GB_20D"])
+    result_df["예측종가_LSTM"] = result_df["Close"] * (1 + result_df["Predicted_Return_LSTM"])
+    
     result_df.to_csv(PREDICTED_FILE, index=False)
     print(f"[2단계] 전체 예측 결과 저장 완료 → {PREDICTED_FILE}")
     return result_df
@@ -569,7 +575,10 @@ def simulate_combined_trading_simple_formatted(df):
 
     result_df = pd.DataFrame(history)
     if not result_df.empty:
-        result_df = result_df[["날짜", "모델", "종목명", "티커", "예측 수익률", "현재가", "매수(매도)", "잔여 현금", "총 자산"]]
+        # ✅ 예측 종가 계산 (예측 수익률이 x10000 단위)
+        result_df["예측종가"] = result_df["현재가"] * (1 + result_df["예측 수익률"] / 10000)
+    
+        result_df = result_df[["날짜", "모델", "종목명", "티커", "예측 수익률", "현재가", "예측종가", "매수(매도)", "잔여 현금", "총 자산"]]
         os.makedirs("data", exist_ok=True)
         result_df.to_csv(SIMULATION_FILE_SIMPLE_FORMATTED, index=False)
         print(f"[3단계] 시뮬레이션 결과 저장 완료 → {SIMULATION_FILE_SIMPLE_FORMATTED}")
