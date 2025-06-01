@@ -584,21 +584,23 @@ def simulate_combined_trading_simple_formatted(df):
         )
         result_df["실제 수익률"] = result_df["Return_1D"] * 10000
         result_df["예측 방향 일치"] = (result_df["예측 수익률"] * result_df["실제 수익률"]) > 0
-
-    # 예측 정확도: 0~100% 범위로 정규화
-    result_df["예측 정확도(%)"] = result_df.apply(
-        lambda row: round(
-            max(0.0, (1 - abs(row["예측 수익률"] - row["실제 수익률"]) / (abs(row["실제 수익률"]) + 1e-6))) * 100,
-            2
-        ),
-        axis=1
-    )
+    
+        # 예측 정확도: 0~100% 범위로 정규화
+        result_df["예측 정확도(%)"] = result_df.apply(
+            lambda row: round(
+                max(0.0, (1 - abs(row["예측 수익률"] - row["실제 수익률"]) / (abs(row["실제 수익률"]) + 1e-6))) * 100,
+                2
+            ),
+            axis=1
+        )
     
         # 저장
         result_df.to_csv("data/kr_simulation_result_with_accuracy.csv", index=False, encoding="utf-8-sig")
         print("✅ 시뮬레이션 결과 + 정확도 저장 완료 → data/kr_simulation_result_with_accuracy.csv")
+    
     else:
         print("[3단계] 시뮬레이션 결과 없음")
+
 
     final_assets = {}
     for model, port in portfolios.items():
