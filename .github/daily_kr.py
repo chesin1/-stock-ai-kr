@@ -346,7 +346,7 @@ def predict_ai_scores(df):
     X_lstm_train, y_lstm_train = [], []
     for i in range(SEQUENCE_LENGTH, len(scaled_df)):
         X_lstm_train.append(scaled_df.iloc[i - SEQUENCE_LENGTH:i].values)
-        y_lstm_train.append(y_train_1d.values[i])
+        y_lstm_train.append(y_train_1d.iloc[i])
 
     X_lstm_train = np.array(X_lstm_train)
     y_lstm_train = np.array(y_lstm_train)
@@ -373,30 +373,40 @@ def predict_ai_scores(df):
 
         test_df[FEATURE_COLUMNS] = test_df[FEATURE_COLUMNS].fillna(method='ffill').fillna(method='bfill').fillna(0)
 
-        if test_df[FEATURE_COLUMNS].isnull().values.any():
-            print(f"⚠️ {current_date.date()} → 여전히 NaN 있음, 예측 스킵")
-            continue
-
         # GB 예측
         test_df["Predicted_Return_GB_1D"] = gb_1d.predict(test_df[FEATURE_COLUMNS]) * 4
         test_df["Predicted_Return_GB_20D"] = gb_20d.predict(test_df[FEATURE_COLUMNS])
 
-        # ✅ LSTM 예측용 시퀀스 생성
-        X_test_scaled = scaler.transform(test_df[FEATURE_COLUMNS])
-        sequence_input = []
+        # ✅ LSTM 예측용 시퀀스: 종목별 과거 10일 시퀀스 생성
+        lstm_preds = []
+        valid_rows = []
 
-        for i in range(len(X_test_scaled)):
-            if i < SEQUENCE_LENGTH:
-                pad = np.zeros((SEQUENCE_LENGTH - i, X_test_scaled.shape[1]))
-                sequence = np.vstack((pad, X_test_scaled[:i + 1]))
-            else:
-                sequence = X_test_scaled[i - SEQUENCE_LENGTH + 1:i + 1]
-            sequence_input.append(sequence)
+        for _, row in test_df.iterrows():
+            ticker = row["Ticker"]
+            target_date = row["Date"]
 
-        X_lstm_test = np.array(sequence_input)
-        test_df["Predicted_Return_LSTM"] = dense_lstm_model.predict(X_lstm_test, verbose=0).flatten() * 30
+            # 해당 종목의 과거 10일
+            past_window = df[(df["Ticker"] == ticker) & (df["Date"] < target_date)].sort_values(by="Date").tail(SEQUENCE_LENGTH)
 
+            if len(past_window) < SEQUENCE_LENGTH:
+                continue  # 시퀀스 부족 → 예측 제외
+
+            X_seq = past_window[FEATURE_COLUMNS].fillna(0)
+            X_seq_scaled = scaler.transform(X_seq)
+            X_lstm_input = np.expand_dims(X_seq_scaled, axis=0)  # (1, 10, feature수)
+
+            pred = dense_lstm_model.predict(X_lstm_input, verbose=0)[0][0]
+            lstm_preds.append(pred * 30)
+            valid_rows.append(row)
+
+        if not valid_rows:
+            print(f"⚠️ {current_date.date()} → LSTM 예측 불가 (시퀀스 부족)")
+            continue
+
+        test_df = pd.DataFrame(valid_rows)
+        test_df["Predicted_Return_LSTM"] = lstm_preds
         all_preds.append(test_df)
+
         print(f"✅ {current_date.date()} 예측 완료 - {len(test_df)}종목")
 
     if not all_preds:
@@ -407,6 +417,7 @@ def predict_ai_scores(df):
     result_df.to_csv(PREDICTED_FILE, index=False)
     print(f"[2단계] 전체 예측 결과 저장 완료 → {PREDICTED_FILE}")
     return result_df
+
 
 
 # ------------------------
