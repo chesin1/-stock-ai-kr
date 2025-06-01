@@ -607,8 +607,8 @@ def simulate_combined_trading_simple_formatted(df):
             "보유 종목": holding_summary
         }
 
-        if model == "Dense-LSTM" and holding_summary:
-            df_lstm = pd.DataFrame([
+        if holding_summary:
+            df_model = pd.DataFrame([
                 {
                     "모델": model,
                     "종목명": ticker_to_name.get(ticker, ticker),
@@ -622,9 +622,11 @@ def simulate_combined_trading_simple_formatted(df):
                 {"모델": model, "종목명": "현금", "티커": "", "보유 수량": "", "현재가": "", "평가 금액": round(port["capital"], 2)},
                 {"모델": model, "종목명": "총 자산", "티커": "", "보유 수량": "", "현재가": "", "평가 금액": round(total_asset, 2)}
             ])
-
-            df_lstm.to_csv("data/dense_lstm_portfolio_final.csv", index=False, encoding="utf-8-sig")
-            print("📁 Dense-LSTM 최종 포트폴리오 저장 완료 → data/dense_lstm_portfolio_final.csv")
+        
+            # ✅ 모델명으로 파일명 생성 (공백 제거 및 소문자화)
+            filename = f"data/{model.lower().replace('-', '_')}_portfolio_final.csv"
+            df_model.to_csv(filename, index=False, encoding="utf-8-sig")
+            print(f"📁 {model} 최종 포트폴리오 저장 완료 → {filename}")
 
     return result_df, final_assets
 
