@@ -318,10 +318,11 @@ def update_stock_and_macro_data():
 # ------------------------
 # 2단계: AI 모델 예측
 # ------------------------
-np.random.seed(42)
-tf.random.set_seed(42)
+def reset_seed():
+    np.random.seed(42)
+    tf.random.set_seed(42)
 
-# 모델 생성 함수 정의
+# 모델 생성 함수
 def build_gb_1d():
     return GradientBoostingRegressor(n_estimators=200, learning_rate=0.08, max_depth=4, subsample=0.8)
 
@@ -330,6 +331,7 @@ def build_gb_20d():
 
 def build_dense_lstm(input_shape):
     K.clear_session()
+    reset_seed()
     model = Sequential([
         LSTM(128, activation='tanh', input_shape=input_shape),
         BatchNormalization(),
@@ -395,6 +397,9 @@ def predict_ai_scores(df):
     all_preds = []
 
     for current_date in test_dates:
+        K.clear_session()
+        reset_seed()
+
         test_df = df[df["Date"] == current_date].copy()
         if test_df.empty:
             continue
@@ -422,7 +427,7 @@ def predict_ai_scores(df):
             scaled_feats = scaler.transform(past_feats)
             input_seq = np.expand_dims(scaled_feats, axis=0)
             pred = dense_lstm_model.predict(input_seq, verbose=0)[0][0]
-            lstm_preds.append(pred)  # pred * 30 제거
+            lstm_preds.append(pred)
             valid_rows.append(row)
 
         if not valid_rows:
@@ -439,7 +444,6 @@ def predict_ai_scores(df):
         return pd.DataFrame()
 
     result_df = pd.concat(all_preds, ignore_index=True)
-
     result_df["예측종가_GB_1D"] = result_df["Close"] * (1 + result_df["Predicted_Return_GB_1D"])
     result_df["예측종가_GB_20D"] = result_df["Close"] * (1 + result_df["Predicted_Return_GB_20D"])
     result_df["예측종가_Dense_LSTM"] = result_df["Close"] * (1 + result_df["Predicted_Return_Dense_LSTM"])
