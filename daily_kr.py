@@ -371,18 +371,22 @@ def predict_ai_scores(df):
     # Dense-LSTM 훈련
     SEQUENCE_LENGTH = 10
     scaler = MinMaxScaler()
-    X_scaled = scaler.fit_transform(X_train)
-    scaled_df = pd.DataFrame(X_scaled)
-
     X_lstm_train, y_lstm_train = [], []
-    for i in range(SEQUENCE_LENGTH, len(scaled_df)):
-        X_lstm_train.append(scaled_df.iloc[i - SEQUENCE_LENGTH:i].values)
-        y_lstm_train.append(y_train_1d.iloc[i])
+
+    for ticker in train_df["Ticker"].unique():
+        temp_df = train_df[train_df["Ticker"] == ticker].copy()
+        X_temp = temp_df[FEATURE_COLUMNS].fillna(0).values
+        y_temp = temp_df["Return_1D"].values
+        X_scaled = scaler.fit_transform(X_temp)
+
+        for i in range(SEQUENCE_LENGTH, len(X_scaled)):
+            X_lstm_train.append(X_scaled[i - SEQUENCE_LENGTH:i])
+            y_lstm_train.append(y_temp[i])
 
     X_lstm_train = np.array(X_lstm_train)
     y_lstm_train = np.array(y_lstm_train)
 
-    dense_lstm_model = build_dense_lstm((SEQUENCE_LENGTH, X_scaled.shape[1]))
+    dense_lstm_model = build_dense_lstm((SEQUENCE_LENGTH, X_lstm_train.shape[2]))
     early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
     dense_lstm_model.fit(X_lstm_train, y_lstm_train, epochs=30, batch_size=16, validation_split=0.1, callbacks=[early_stop], verbose=1)
 
@@ -418,7 +422,7 @@ def predict_ai_scores(df):
             scaled_feats = scaler.transform(past_feats)
             input_seq = np.expand_dims(scaled_feats, axis=0)
             pred = dense_lstm_model.predict(input_seq, verbose=0)[0][0]
-            lstm_preds.append(pred * 30)
+            lstm_preds.append(pred)  # pred * 30 제거
             valid_rows.append(row)
 
         if not valid_rows:
